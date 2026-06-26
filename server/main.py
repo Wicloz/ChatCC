@@ -1,12 +1,16 @@
-"""ChatCC Phase 1 server: read-only YouTube live chat for ComputerCraft tablets.
+"""ChatCC server: YouTube live chat for ComputerCraft tablets.
 
 Endpoints:
     GET  /install          -> installer Lua, with this server's URL injected
     GET  /client           -> the chat client Lua ('ytchat'), URL injected
     WS   /ws/chat?v=<url>  -> live chat stream for one video, opcode-framed
+    WS   /ws/login         -> OAuth device-flow login (returns a bearer token)
 
-The API key is read from the YT_API_KEY environment variable (loaded from .env
-via python-dotenv). It never appears in any served file or client.
+Secrets are read from the environment (loaded from .env via python-dotenv) and
+never appear in any served file or client:
+    YT_API_KEY            -> reading chat (Phase 1)
+    GOOGLE_CLIENT_ID      -> OAuth device flow (Phase 2, optional)
+    GOOGLE_CLIENT_SECRET  -> OAuth device flow (Phase 2, optional)
 """
 
 import asyncio
@@ -15,12 +19,15 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import httpx
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import PlainTextResponse
 
+import login
 import protocol
 import youtube
+from credentials import CredentialStore
 from hub import ChatHub
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -30,21 +37,33 @@ LUA_DIR = Path(__file__).resolve().parent.parent / "lua"
 ENV_VAR = "YT_API_KEY"
 
 hub: ChatHub
+store: CredentialStore
+oauth_http: httpx.AsyncClient
+CLIENT_ID: str | None = None
+CLIENT_SECRET: str | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global hub
+    global hub, store, oauth_http, CLIENT_ID, CLIENT_SECRET
     load_dotenv()
     api_key = os.environ.get(ENV_VAR)
     if not api_key:
         raise RuntimeError(f"{ENV_VAR} is not set (checked .env and environment)")
     hub = ChatHub(api_key)
-    log.info("ChatCC server ready")
+
+    CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+    CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+    data_dir = Path(os.environ.get("CHATCC_DATA_DIR", "data"))
+    store = CredentialStore(data_dir / "credentials.json")
+    oauth_http = httpx.AsyncClient()
+    log.info("ChatCC server ready (login %s)",
+             "enabled" if (CLIENT_ID and CLIENT_SECRET) else "disabled — set GOOGLE_CLIENT_ID/SECRET")
     try:
         yield
     finally:
         await hub.aclose()
+        await oauth_http.aclose()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -120,3 +139,37 @@ async def ws_chat(ws: WebSocket):
         pass
     finally:
         await hub.release(source, queue)
+
+
+@app.websocket("/ws/login")
+async def ws_login(ws: WebSocket):
+    await ws.accept()
+    if not (CLIENT_ID and CLIENT_SECRET):
+        await ws.send_text(protocol.status("error", "login is not configured on this server"))
+        await ws.close()
+        return
+
+    flow = asyncio.create_task(
+        login.perform_device_login(ws, oauth_http, CLIENT_ID, CLIENT_SECRET, store)
+    )
+    watch = asyncio.create_task(_recv_until_close(ws))
+    try:
+        done, pending = await asyncio.wait({flow, watch}, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        # Surface a login crash instead of swallowing it.
+        if flow in done:
+            flow.result()
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        log.exception("login flow failed")
+        try:
+            await ws.send_text(protocol.status("error", "internal login error"))
+        except Exception:
+            pass
+    finally:
+        try:
+            await ws.close()
+        except Exception:
+            pass

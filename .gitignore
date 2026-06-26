@@ -3,6 +3,9 @@
 .env.*
 !.env.example
 
+# Runtime data (credential store with refresh tokens) — never commit/bake
+data/
+
 # Python
 **/__pycache__/
 *.py[cod]

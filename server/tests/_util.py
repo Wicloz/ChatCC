@@ -51,6 +51,31 @@ class FakeStreamResponse:
         return self._body
 
 
+class FakeHTTP:
+    """Stand-in for httpx.AsyncClient supporting .post()/.get(); returns queued
+    FakeResponses in order."""
+
+    def __init__(self, responses=None):
+        self._responses = list(responses or [])
+        self.calls = []
+
+    def queue(self, *responses):
+        self._responses.extend(responses)
+
+    async def post(self, url, data=None, headers=None):
+        self.calls.append(("POST", url, data, headers))
+        return self._next()
+
+    async def get(self, url, params=None, headers=None):
+        self.calls.append(("GET", url, params, headers))
+        return self._next()
+
+    def _next(self):
+        if not self._responses:
+            raise AssertionError("FakeHTTP: no more responses queued")
+        return self._responses.pop(0)
+
+
 class FakeURL:
     def __init__(self, base):
         self._base = base

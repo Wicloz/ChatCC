@@ -13,6 +13,7 @@ import pytest
 from dotenv import load_dotenv
 
 import main
+import oauth
 import youtube
 from chat_source import ChatSource
 
@@ -100,3 +101,31 @@ def test_ws_endpoint_streams_live():
                     live = True
                     break
             assert live, "ws never delivered a live status"
+
+
+def _oauth_creds():
+    load_dotenv()
+    return os.environ.get("GOOGLE_CLIENT_ID"), os.environ.get("GOOGLE_CLIENT_SECRET")
+
+
+requires_oauth = pytest.mark.skipif(
+    not all(_oauth_creds()), reason="GOOGLE_CLIENT_ID/SECRET not set"
+)
+
+
+@requires_oauth
+def test_device_code_and_one_poll():
+    """Verify the OAuth client works end-to-end without human consent:
+    request a device code, then poll once and expect authorization_pending."""
+    client_id, client_secret = _oauth_creds()
+
+    async def go():
+        async with httpx.AsyncClient() as client:
+            info = await oauth.request_device_code(client, client_id)
+            assert info["user_code"] and info["device_code"]
+            assert info["verification_url"]
+            status, _ = await oauth.poll_token(client, client_id, client_secret, info["device_code"])
+            # Nobody has consented in this split second, so it must be pending.
+            assert status == oauth.PENDING, f"unexpected poll status: {status}"
+    asyncio.run(go())
+

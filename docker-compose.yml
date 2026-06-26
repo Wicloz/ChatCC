@@ -5,6 +5,12 @@ services:
       - "8080:8080"
     environment:
       # Substituted from the .env file in this directory (or the host env).
-      # The secret value stays in .env and is never committed.
+      # Secret values stay in .env and are never committed.
       - YT_API_KEY=${YT_API_KEY}
+      # Optional — enables OAuth login/sending (Phase 2):
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+    volumes:
+      # Persist the credential store (refresh tokens) across restarts.
+      - ./data:/app/data
     restart: unless-stopped

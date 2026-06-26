@@ -5,9 +5,12 @@ local SERVER = "{{SERVER}}"
 local args = { ... }
 if #args < 1 then
     print("Usage: ytchat <youtube-live-url-or-id>")
+    print("       ytchat login")
     return
 end
 local video = args[1]
+
+local TOKEN_FILE = ".ytchat-token"
 
 -- Derive the WebSocket URL from the injected HTTP base (https->wss, http->ws).
 local WS_BASE = SERVER:gsub("^http", "ws")
@@ -17,6 +20,72 @@ local function urlencode(s)
         return string.format("%%%02X", string.byte(c))
     end))
 end
+
+-- OAuth device-flow login. The tablet only shows a code and stores the bearer
+-- token the server hands back; it never sees Google or any secret.
+local function runLogin()
+    term.clear()
+    term.setCursorPos(1, 1)
+    print("Connecting...")
+    local ws, err = http.websocket(WS_BASE .. "/ws/login")
+    if not ws then
+        printError("Connection failed: " .. tostring(err))
+        return
+    end
+    while true do
+        local ev = { os.pullEvent() }
+        local name = ev[1]
+        if name == "websocket_message" then
+            local raw = ev[3]
+            local op = raw:sub(1, 1)
+            local data = textutils.unserialiseJSON(raw:sub(2))
+            if op == "D" and data then
+                term.clear()
+                term.setCursorPos(1, 1)
+                print("To log in with your Google account:")
+                print("")
+                print("1. On your phone or PC, open:")
+                print("   " .. (data.url or "google.com/device"))
+                print("")
+                print("2. Enter this code:")
+                term.setTextColor(colors.yellow)
+                print("")
+                print("   " .. (data.code or "?"))
+                term.setTextColor(colors.white)
+                print("")
+                print("Waiting for approval... (q to cancel)")
+            elseif op == "A" and data then
+                local f = fs.open(TOKEN_FILE, "w")
+                f.write(data.token)
+                f.close()
+                term.clear()
+                term.setCursorPos(1, 1)
+                local who = (data.account and data.account ~= "") and (" as " .. data.account) or ""
+                print("Logged in" .. who .. ".")
+                print("You can now send messages while watching chat.")
+                pcall(function() ws.close() end)
+                return
+            elseif op == "S" and data and data.s == "error" then
+                printError("Login failed: " .. (data.m or "unknown error"))
+                pcall(function() ws.close() end)
+                return
+            end
+        elseif name == "websocket_closed" then
+            printError("Connection closed.")
+            return
+        elseif name == "key" and ev[2] == keys.q then
+            pcall(function() ws.close() end)
+            print("Cancelled.")
+            return
+        end
+    end
+end
+
+if video == "login" then
+    runLogin()
+    return
+end
+
 local WS_URL = WS_BASE .. "/ws/chat?v=" .. urlencode(video)
 
 local ROLE_COLOR = {

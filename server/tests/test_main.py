@@ -41,3 +41,13 @@ def test_ws_rejects_bad_video():
     run(main.ws_chat(ws))
     assert ws.accepted and ws.closed
     assert any(f.startswith("S") and "error" in f for f in ws.sent)
+
+
+def test_ws_login_rejected_when_unconfigured(monkeypatch):
+    # No GOOGLE_CLIENT_ID/SECRET configured -> login disabled.
+    monkeypatch.setattr(main, "CLIENT_ID", None)
+    monkeypatch.setattr(main, "CLIENT_SECRET", None)
+    ws = FakeWS()
+    run(main.ws_login(ws))
+    assert ws.accepted and ws.closed
+    assert any(f.startswith("S") and "not configured" in f for f in ws.sent)
