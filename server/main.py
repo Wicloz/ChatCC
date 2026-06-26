@@ -14,6 +14,7 @@ never appear in any served file or client:
 """
 
 import asyncio
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -29,6 +30,7 @@ import protocol
 import youtube
 from credentials import CredentialStore
 from hub import ChatHub
+from sender import Sender
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("chatcc")
@@ -39,13 +41,14 @@ ENV_VAR = "YT_API_KEY"
 hub: ChatHub
 store: CredentialStore
 oauth_http: httpx.AsyncClient
+sender: Sender | None = None
 CLIENT_ID: str | None = None
 CLIENT_SECRET: str | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global hub, store, oauth_http, CLIENT_ID, CLIENT_SECRET
+    global hub, store, oauth_http, sender, CLIENT_ID, CLIENT_SECRET
     load_dotenv()
     api_key = os.environ.get(ENV_VAR)
     if not api_key:
@@ -57,8 +60,9 @@ async def lifespan(app: FastAPI):
     data_dir = Path(os.environ.get("CHATCC_DATA_DIR", "data"))
     store = CredentialStore(data_dir / "credentials.json")
     oauth_http = httpx.AsyncClient()
-    log.info("ChatCC server ready (login %s)",
-             "enabled" if (CLIENT_ID and CLIENT_SECRET) else "disabled — set GOOGLE_CLIENT_ID/SECRET")
+    sender = Sender(oauth_http, CLIENT_ID, CLIENT_SECRET, store) if (CLIENT_ID and CLIENT_SECRET) else None
+    log.info("ChatCC server ready (login/send %s)",
+             "enabled" if sender else "disabled — set GOOGLE_CLIENT_ID/SECRET")
     try:
         yield
     finally:
@@ -107,7 +111,34 @@ async def _pump(ws: WebSocket, queue: asyncio.Queue) -> None:
 async def _recv_until_close(ws: WebSocket) -> None:
     try:
         while True:
-            await ws.receive_text()  # clients send nothing in Phase 1; just detect close
+            await ws.receive_text()  # just detect close
+    except WebSocketDisconnect:
+        return
+
+
+async def _post_message(ws: WebSocket, source, auth_token: str, text: str) -> None:
+    if sender is None:
+        await ws.send_text(protocol.status("error", "sending is not configured on this server"))
+        return
+    ok, err = await sender.send(auth_token, source.live_chat_id, text)
+    if not ok:
+        await ws.send_text(protocol.status("error", err or "send failed"))
+    # On success the message echoes back through the live stream, so no ack needed.
+
+
+async def _recv_chat(ws: WebSocket, source) -> None:
+    """Handle client->server frames on the chat socket. 'P' = post a message."""
+    try:
+        while True:
+            raw = await ws.receive_text()
+            if not raw:
+                continue
+            if raw[:1] == "P":
+                try:
+                    data = json.loads(raw[1:])
+                except json.JSONDecodeError:
+                    continue
+                await _post_message(ws, source, data.get("k", ""), data.get("m", ""))
     except WebSocketDisconnect:
         return
 
@@ -129,7 +160,7 @@ async def ws_chat(ws: WebSocket):
 
     try:
         pump = asyncio.create_task(_pump(ws, queue))
-        watch = asyncio.create_task(_recv_until_close(ws))
+        watch = asyncio.create_task(_recv_chat(ws, source))
         done, pending = await asyncio.wait(
             {pump, watch}, return_when=asyncio.FIRST_COMPLETED
         )

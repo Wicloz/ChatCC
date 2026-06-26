@@ -91,7 +91,7 @@ def test_login_without_required_scope_is_error(monkeypatch, no_sleep, tmp_path):
     _patch_device(monkeypatch)
 
     async def poll(*a):
-        # User unchecked the permission: granted some other scope, not force-ssl.
+        # User unchecked the permission: granted some other scope, not youtube.
         return (oauth.SUCCESS, {"refresh_token": "RT", "access_token": "AT",
                                 "scope": "https://www.googleapis.com/auth/userinfo.email"})
     monkeypatch.setattr(oauth, "poll_token", poll)

@@ -104,6 +104,17 @@ local scroll = 0      -- lines scrolled up from the bottom (0 = newest)
 local statusText = "connecting..."
 local W, H = term.getSize()
 
+-- Sending: load the bearer token saved by `ytchat login`, if present.
+local authToken = nil
+if fs.exists(TOKEN_FILE) then
+    local f = fs.open(TOKEN_FILE, "r")
+    authToken = f.readAll()
+    f.close()
+end
+local composing = false
+local input = ""
+local MAX_INPUT = 200   -- YouTube live chat message limit
+
 -- Wrap one message into colored display lines with a hanging indent.
 local function messageToLines(msg, width)
     local out = {}
@@ -201,14 +212,29 @@ local function redraw()
         row = row + 1
     end
 
-    -- Status bar
+    -- Bottom line: a compose box while typing, otherwise the status bar.
     term.setCursorPos(1, H)
-    term.setBackgroundColor(colors.gray)
-    term.setTextColor(colors.white)
-    term.clearLine()
-    local hint = scroll > 0 and ("  [scrolled +" .. scroll .. "]") or ""
-    local bar = " " .. statusText .. hint .. "  | q:quit  PgUp/PgDn:scroll"
-    term.write(bar:sub(1, W))
+    if composing then
+        term.setBackgroundColor(colors.black)
+        term.setTextColor(colors.white)
+        term.clearLine()
+        local prompt = "> "
+        local shown = input
+        -- Scroll the field so the caret stays visible on a narrow screen.
+        if #prompt + #shown > W - 1 then
+            shown = shown:sub(#prompt + #shown - (W - 1) + 1)
+        end
+        term.write(prompt .. shown)
+        term.setCursorBlink(true)
+    else
+        term.setBackgroundColor(colors.gray)
+        term.setTextColor(colors.white)
+        term.clearLine()
+        local hint = scroll > 0 and ("[+" .. scroll .. "] ") or ""
+        local act = authToken and "t:send" or "login req'd"
+        term.write((" " .. statusText .. "  " .. hint .. act .. " q:quit"):sub(1, W))
+        term.setCursorBlink(false)
+    end
     term.setBackgroundColor(colors.black)
 end
 
@@ -259,12 +285,42 @@ local function run()
                     handleFrame(ev[3])
                 elseif name == "websocket_closed" then
                     setStatus("disconnected, reconnecting...")
+                    composing = false
                     redraw()
                     break
+                elseif name == "char" then
+                    if composing and #input < MAX_INPUT then
+                        input = input .. ev[2]
+                        redraw()
+                    end
+                elseif name == "paste" then
+                    if composing then
+                        input = (input .. ev[2]):sub(1, MAX_INPUT)
+                        redraw()
+                    end
                 elseif name == "key" then
                     local k = ev[2]
-                    if k == keys.q then
+                    if composing then
+                        if k == keys.enter then
+                            local text = input
+                            input, composing = "", false
+                            if #text > 0 then
+                                ws.send("P" .. textutils.serialiseJSON({ m = text, k = authToken }))
+                            end
+                            redraw()
+                        elseif k == keys.backspace then
+                            input = input:sub(1, #input - 1)
+                            redraw()
+                        end
+                    elseif k == keys.q then
                         quit = true; break
+                    elseif k == keys.enter or k == keys.t then
+                        if authToken then
+                            composing = true
+                        else
+                            setStatus("not logged in - run: ytchat login")
+                        end
+                        redraw()
                     elseif k == keys.pageUp then
                         scroll = scroll + (H - 2); redraw()
                     elseif k == keys.pageDown then
@@ -288,6 +344,7 @@ local function run()
 end
 
 run()
+term.setCursorBlink(false)
 term.setBackgroundColor(colors.black)
 term.setTextColor(colors.white)
 term.clear()

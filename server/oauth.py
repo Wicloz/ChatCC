@@ -9,12 +9,16 @@ import httpx
 DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
+INSERT_MESSAGE_URL = "https://www.googleapis.com/youtube/v3/liveChat/messages"
 
 DEVICE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 REFRESH_GRANT = "refresh_token"
 
-# Writing live chat requires this scope; an API key cannot write.
-SCOPE = "https://www.googleapis.com/auth/youtube.force-ssl"
+# Scope used to authorize sending. liveChatMessages.insert accepts either
+# youtube.force-ssl or the full youtube scope, but Google's limited-input DEVICE
+# flow rejects force-ssl ("invalid_scope") — only youtube / youtube.readonly are
+# allowed there. So we request the full youtube scope, which also permits writes.
+SCOPE = "https://www.googleapis.com/auth/youtube"
 
 # Poll outcomes the caller distinguishes.
 PENDING = "authorization_pending"
@@ -75,6 +79,37 @@ async def refresh_access_token(client: httpx.AsyncClient, client_id: str, client
     if r.status_code != 200:
         raise OAuthError(f"refresh HTTP {r.status_code}: {r.text[:200]}")
     return r.json()["access_token"]
+
+
+async def insert_chat_message(client: httpx.AsyncClient, access_token: str,
+                              live_chat_id: str, text: str) -> tuple[bool, str | None]:
+    """Post a text message to a live chat as the authenticated user.
+    Returns (True, None) on success or (False, error_message)."""
+    body = {
+        "snippet": {
+            "liveChatId": live_chat_id,
+            "type": "textMessageEvent",
+            "textMessageDetails": {"messageText": text},
+        }
+    }
+    try:
+        r = await client.post(
+            INSERT_MESSAGE_URL,
+            params={"part": "snippet"},
+            headers={"Authorization": f"Bearer {access_token}"},
+            json=body,
+        )
+    except httpx.HTTPError as e:
+        return False, f"network error: {e!r}"
+    if r.status_code == 200:
+        return True, None
+    # Surface Google's reason (rate limit, too long, chat ended, etc.) if present.
+    reason = None
+    try:
+        reason = r.json().get("error", {}).get("message")
+    except Exception:
+        pass
+    return False, reason or f"send failed (HTTP {r.status_code})"
 
 
 async def fetch_channel_title(client: httpx.AsyncClient, access_token: str) -> str | None:

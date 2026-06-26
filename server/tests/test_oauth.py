@@ -17,7 +17,7 @@ def test_request_device_code_parses():
     # scope and client_id are sent in the POST body.
     _, url, data, _ = http.calls[0]
     assert url == oauth.DEVICE_CODE_URL
-    assert data["client_id"] == "cid" and "force-ssl" in data["scope"]
+    assert data["client_id"] == "cid" and data["scope"] == oauth.SCOPE
 
 
 def test_request_device_code_accepts_verification_uri_alias():

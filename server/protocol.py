@@ -11,6 +11,9 @@ Opcodes:
     D  device prompt  {"url","code","expires"}      (login flow)
     A  login ok       {"token","account"}           (login flow)
 
+Client -> server (on /ws/chat):
+    P  post message   {"m"(text),"k"(auth token)}
+
 Roles: owner | moderator | member | verified | user
 States: connecting | live | ended | error
 """
@@ -36,3 +39,8 @@ def device_prompt(url: str, code: str, expires: int) -> str:
 
 def login_ok(auth_token: str, account: str) -> str:
     return _frame("A", {"token": auth_token, "account": account})
+
+
+def post(text: str, auth_token: str) -> str:
+    """Client -> server: request to send `text` as the holder of `auth_token`."""
+    return _frame("P", {"m": text, "k": auth_token})

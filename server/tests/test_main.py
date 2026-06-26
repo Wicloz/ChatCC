@@ -51,3 +51,38 @@ def test_ws_login_rejected_when_unconfigured(monkeypatch):
     run(main.ws_login(ws))
     assert ws.accepted and ws.closed
     assert any(f.startswith("S") and "not configured" in f for f in ws.sent)
+
+
+class _Src:
+    live_chat_id = "CHAT"
+
+
+def test_post_message_without_sender(monkeypatch):
+    monkeypatch.setattr(main, "sender", None)
+    ws = FakeWS()
+    run(main._post_message(ws, _Src(), "tok", "hi"))
+    assert any(f.startswith("S") and "not configured" in f for f in ws.sent)
+
+
+def test_post_message_reports_error(monkeypatch):
+    class FakeSender:
+        async def send(self, token, chat, text):
+            return False, "boom"
+    monkeypatch.setattr(main, "sender", FakeSender())
+    ws = FakeWS()
+    run(main._post_message(ws, _Src(), "tok", "hi"))
+    assert any(f.startswith("S") and "boom" in f for f in ws.sent)
+
+
+def test_post_message_success_is_silent(monkeypatch):
+    sent = []
+
+    class FakeSender:
+        async def send(self, token, chat, text):
+            sent.append((token, chat, text))
+            return True, None
+    monkeypatch.setattr(main, "sender", FakeSender())
+    ws = FakeWS()
+    run(main._post_message(ws, _Src(), "tok", "hi"))
+    assert ws.sent == []                      # success echoes via the stream
+    assert sent == [("tok", "CHAT", "hi")]

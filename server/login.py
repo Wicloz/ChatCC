@@ -41,8 +41,8 @@ async def perform_device_login(ws, client, client_id, client_secret, store) -> N
                 await ws.send_text(protocol.status("error", "no refresh token returned; revoke access and retry"))
                 return
             # Granular consent: the user can uncheck the permission on the consent
-            # screen. Without force-ssl we can't send, so reject clearly now
-            # rather than failing confusingly on the first message.
+            # screen. Without the youtube scope we can't send, so reject clearly
+            # now rather than failing confusingly on the first message.
             scope = data.get("scope", "")
             if oauth.SCOPE not in scope.split():
                 log.info("login missing required scope; granted=%r", scope)
