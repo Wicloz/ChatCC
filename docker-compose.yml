@@ -1,0 +1,10 @@
+services:
+  chatcc:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      # Substituted from the .env file in this directory (or the host env).
+      # The secret value stays in .env and is never committed.
+      - YT_API_KEY=${YT_API_KEY}
+    restart: unless-stopped

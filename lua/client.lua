@@ -1,0 +1,219 @@
+-- ChatCC client ('ytchat'): read a YouTube live chat on a CC tablet.
+-- The server injects its own URL in place of {{SERVER}} when serving /client.
+local SERVER = "{{SERVER}}"
+
+local args = { ... }
+if #args < 1 then
+    print("Usage: ytchat <youtube-live-url-or-id>")
+    return
+end
+local video = args[1]
+
+-- Derive the WebSocket URL from the injected HTTP base (https->wss, http->ws).
+local WS_BASE = SERVER:gsub("^http", "ws")
+
+local function urlencode(s)
+    return (s:gsub("[^%w%-%._~]", function(c)
+        return string.format("%%%02X", string.byte(c))
+    end))
+end
+local WS_URL = WS_BASE .. "/ws/chat?v=" .. urlencode(video)
+
+local ROLE_COLOR = {
+    owner = colors.orange,
+    moderator = colors.blue,
+    member = colors.lime,
+    verified = colors.lightGray,
+    user = colors.yellow,
+}
+local INDENT = "  "
+
+-- State -------------------------------------------------------------------
+local messages = {}   -- {author=, text=, role=}
+local lines = {}      -- flattened display lines; each line = {segments {c=,t=}}
+local scroll = 0      -- lines scrolled up from the bottom (0 = newest)
+local statusText = "connecting..."
+local W, H = term.getSize()
+
+-- Wrap one message into colored display lines with a hanging indent.
+local function messageToLines(msg, width)
+    local out = {}
+    local cur, curw = {}, 0
+    local function newline(indent)
+        out[#out + 1] = cur
+        cur, curw = {}, 0
+        if indent then
+            cur[#cur + 1] = { c = colors.gray, t = INDENT }
+            curw = #INDENT
+        end
+    end
+    local function addWord(word, color)
+        if curw > 0 and curw + #word > width then
+            newline(true)
+        end
+        while #word > width - curw do          -- word longer than a line: hard split
+            local take = math.max(1, width - curw)
+            cur[#cur + 1] = { c = color, t = word:sub(1, take) }
+            word = word:sub(take + 1)
+            newline(true)
+        end
+        cur[#cur + 1] = { c = color, t = word }
+        curw = curw + #word
+    end
+
+    addWord((msg.author or "?") .. ":", ROLE_COLOR[msg.role] or colors.white)
+    for word in (msg.text or ""):gmatch("%S+") do
+        if curw + 1 <= width then
+            cur[#cur + 1] = { c = colors.white, t = " " }
+            curw = curw + 1
+        end
+        addWord(word, colors.white)
+    end
+    newline(false)
+    return out
+end
+
+local function rebuildLines()
+    lines = {}
+    for _, m in ipairs(messages) do
+        for _, l in ipairs(messageToLines(m, W)) do
+            lines[#lines + 1] = l
+        end
+    end
+end
+
+local function addMessage(m)
+    messages[#messages + 1] = m
+    local added = messageToLines(m, W)
+    for _, l in ipairs(added) do
+        lines[#lines + 1] = l
+    end
+    -- If the user has scrolled up, keep their view anchored as lines arrive.
+    if scroll > 0 then
+        scroll = scroll + #added
+    end
+end
+
+local function redraw()
+    W, H = term.getSize()
+    local areaH = H - 2
+    term.setBackgroundColor(colors.black)
+    term.clear()
+
+    -- Title bar
+    term.setCursorPos(1, 1)
+    term.setBackgroundColor(colors.gray)
+    term.setTextColor(colors.white)
+    term.clearLine()
+    local title = " YT Chat  " .. video
+    term.write(title:sub(1, W))
+
+    -- Chat area
+    term.setBackgroundColor(colors.black)
+    local total = #lines
+    local maxScroll = math.max(0, total - areaH)
+    if scroll > maxScroll then scroll = maxScroll end
+    local startIdx = math.max(1, total - areaH + 1 - scroll)
+    local endIdx = math.min(total, startIdx + areaH - 1)
+    local row = 2
+    for i = startIdx, endIdx do
+        term.setCursorPos(1, row)
+        for _, seg in ipairs(lines[i]) do
+            term.setTextColor(seg.c)
+            term.write(seg.t)
+        end
+        row = row + 1
+    end
+
+    -- Status bar
+    term.setCursorPos(1, H)
+    term.setBackgroundColor(colors.gray)
+    term.setTextColor(colors.white)
+    term.clearLine()
+    local hint = scroll > 0 and ("  [scrolled +" .. scroll .. "]") or ""
+    local bar = " " .. statusText .. hint .. "  | q:quit  PgUp/PgDn:scroll"
+    term.write(bar:sub(1, W))
+    term.setBackgroundColor(colors.black)
+end
+
+local function setStatus(s) statusText = s end
+
+local function handleFrame(raw)
+    local op = raw:sub(1, 1)
+    local data = textutils.unserialiseJSON(raw:sub(2))
+    if not data then return end
+    if op == "M" then
+        addMessage({ author = data.a, text = data.m, role = data.r })
+        redraw()
+    elseif op == "S" then
+        local s = data.s
+        if s == "connecting" then setStatus("connecting...")
+        elseif s == "live" then setStatus("LIVE")
+        elseif s == "ended" then setStatus("stream ended")
+        elseif s == "error" then setStatus("error: " .. (data.m or "?"))
+        else setStatus(s) end
+        redraw()
+    end
+end
+
+-- Connect + event loop ----------------------------------------------------
+local function run()
+    local attempt = 0
+    while true do
+        setStatus("connecting...")
+        redraw()
+        local ws, err = http.websocket(WS_URL)
+        if not ws then
+            attempt = attempt + 1
+            if attempt > 5 then
+                setStatus("could not connect: " .. tostring(err))
+                redraw()
+                return
+            end
+            setStatus("connect failed, retrying (" .. attempt .. ")...")
+            redraw()
+            sleep(2)
+        else
+            attempt = 0
+            local quit = false
+            while true do
+                local ev = { os.pullEvent() }
+                local name = ev[1]
+                if name == "websocket_message" then
+                    handleFrame(ev[3])
+                elseif name == "websocket_closed" then
+                    setStatus("disconnected, reconnecting...")
+                    redraw()
+                    break
+                elseif name == "key" then
+                    local k = ev[2]
+                    if k == keys.q then
+                        quit = true; break
+                    elseif k == keys.pageUp then
+                        scroll = scroll + (H - 2); redraw()
+                    elseif k == keys.pageDown then
+                        scroll = math.max(0, scroll - (H - 2)); redraw()
+                    elseif k == keys.up then
+                        scroll = scroll + 1; redraw()
+                    elseif k == keys.down then
+                        scroll = math.max(0, scroll - 1); redraw()
+                    elseif k == keys["end"] then
+                        scroll = 0; redraw()
+                    end
+                elseif name == "term_resize" then
+                    rebuildLines(); redraw()
+                end
+            end
+            pcall(function() ws.close() end)
+            if quit then return end
+            sleep(1)
+        end
+    end
+end
+
+run()
+term.setBackgroundColor(colors.black)
+term.setTextColor(colors.white)
+term.clear()
+term.setCursorPos(1, 1)
+print("ytchat closed.")

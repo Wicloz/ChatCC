@@ -1,0 +1,43 @@
+import main
+from _util import FakeRequest, FakeWS, run
+
+
+# -- URL injection -----------------------------------------------------------
+
+def test_base_url_honours_forwarded_headers():
+    req = FakeRequest(headers={"x-forwarded-proto": "https", "x-forwarded-host": "srv"})
+    assert main._server_base_url(req) == "https://srv"
+
+
+def test_base_url_fallback_to_request():
+    req = FakeRequest(base_url="http://testserver/")
+    assert main._server_base_url(req) == "http://testserver"
+
+
+def test_serve_lua_injects_url():
+    req = FakeRequest(headers={"x-forwarded-proto": "https", "x-forwarded-host": "srv"})
+    body = main._serve_lua("client.lua", req).body.decode("utf-8")
+    assert 'local SERVER = "https://srv"' in body
+
+
+def test_source_files_keep_template_token():
+    # The raw file on disk must still contain the quoted placeholder so the
+    # server can inject at runtime.
+    raw = (main.LUA_DIR / "install.lua").read_text(encoding="utf-8")
+    assert '"{{SERVER}}"' in raw
+
+
+# -- WebSocket validation (no network) ---------------------------------------
+
+def test_ws_rejects_missing_video():
+    ws = FakeWS(query={})
+    run(main.ws_chat(ws))
+    assert ws.accepted and ws.closed
+    assert any(f.startswith("S") and "error" in f for f in ws.sent)
+
+
+def test_ws_rejects_bad_video():
+    ws = FakeWS(query={"v": "this is not an id"})
+    run(main.ws_chat(ws))
+    assert ws.accepted and ws.closed
+    assert any(f.startswith("S") and "error" in f for f in ws.sent)
