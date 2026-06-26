@@ -61,6 +61,22 @@ local function messageToLines(msg, width)
         curw = curw + #word
     end
 
+    -- System events (memberships, super chats, etc.) already name the user in
+    -- their text, so render them as a compact dim line with no author prefix
+    -- instead of wasting space repeating the name.
+    if msg.mtype and msg.mtype ~= "textMessageEvent" then
+        addWord(">", colors.gray)
+        for word in (msg.text or ""):gmatch("%S+") do
+            if curw + 1 <= width then
+                cur[#cur + 1] = { c = colors.gray, t = " " }
+                curw = curw + 1
+            end
+            addWord(word, colors.gray)
+        end
+        newline(false)
+        return out
+    end
+
     addWord((msg.author or "?") .. ":", ROLE_COLOR[msg.role] or colors.white)
     for word in (msg.text or ""):gmatch("%S+") do
         if curw + 1 <= width then
@@ -96,26 +112,17 @@ end
 
 local function redraw()
     W, H = term.getSize()
-    local areaH = H - 2
+    local areaH = H - 1   -- everything except the status bar is chat
     term.setBackgroundColor(colors.black)
     term.clear()
 
-    -- Title bar
-    term.setCursorPos(1, 1)
-    term.setBackgroundColor(colors.gray)
-    term.setTextColor(colors.white)
-    term.clearLine()
-    local title = " YT Chat  " .. video
-    term.write(title:sub(1, W))
-
     -- Chat area
-    term.setBackgroundColor(colors.black)
     local total = #lines
     local maxScroll = math.max(0, total - areaH)
     if scroll > maxScroll then scroll = maxScroll end
     local startIdx = math.max(1, total - areaH + 1 - scroll)
     local endIdx = math.min(total, startIdx + areaH - 1)
-    local row = 2
+    local row = 1
     for i = startIdx, endIdx do
         term.setCursorPos(1, row)
         for _, seg in ipairs(lines[i]) do
@@ -143,7 +150,7 @@ local function handleFrame(raw)
     local data = textutils.unserialiseJSON(raw:sub(2))
     if not data then return end
     if op == "M" then
-        addMessage({ author = data.a, text = data.m, role = data.r })
+        addMessage({ author = data.a, text = data.m, role = data.r, mtype = data.t })
         redraw()
     elseif op == "S" then
         local s = data.s
