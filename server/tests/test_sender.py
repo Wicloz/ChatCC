@@ -2,7 +2,7 @@ import oauth
 import pytest
 import sender as sender_mod
 from credentials import CredentialStore
-from _util import run
+from _util import Clock, run
 
 
 def _store_with_login(tmp_path, refresh="RT"):
@@ -11,8 +11,21 @@ def _store_with_login(tmp_path, refresh="RT"):
     return store, token
 
 
-def _mk(store):
-    return sender_mod.Sender(None, "cid", "sec", store)
+def _mk(store, **kw):
+    return sender_mod.Sender(None, "cid", "sec", store, **kw)
+
+
+def _patch_google(monkeypatch, on_insert=None):
+    async def fake_refresh(*a):
+        return "ACCESS"
+
+    async def fake_insert(c, a, chat, text):
+        if on_insert is not None:
+            on_insert(text)
+        return True, None
+
+    monkeypatch.setattr(oauth, "refresh_access_token", fake_refresh)
+    monkeypatch.setattr(oauth, "insert_chat_message", fake_insert)
 
 
 def test_send_requires_login(tmp_path):
@@ -93,6 +106,39 @@ def test_send_refresh_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(oauth, "refresh_access_token", fake_refresh)
     ok, err = run(_mk(store).send(token, "CHAT", "hi"))
     assert ok is False and "log in again" in err
+
+
+def test_send_rate_limited_per_user(monkeypatch, tmp_path):
+    store, token = _store_with_login(tmp_path)
+    inserts = []
+    _patch_google(monkeypatch, on_insert=inserts.append)
+
+    clock = Clock()
+    snd = _mk(store, burst=2, interval=10.0, clock=clock)  # 2 burst, 1 per 10s
+
+    assert run(snd.send(token, "CHAT", "a"))[0] is True
+    assert run(snd.send(token, "CHAT", "b"))[0] is True
+    ok, err = run(snd.send(token, "CHAT", "c"))           # over the burst
+    assert ok is False and "too fast" in err
+    assert len(inserts) == 2                               # Google not called for the 3rd
+
+    clock.advance(10.0)                                    # one token regained
+    assert run(snd.send(token, "CHAT", "d"))[0] is True
+    assert len(inserts) == 3
+
+
+def test_rate_limit_is_per_user(monkeypatch, tmp_path):
+    store = CredentialStore(tmp_path / "c.json")
+    alice = store.issue("RA", oauth.SCOPE, "Alice")
+    bob = store.issue("RB", oauth.SCOPE, "Bob")
+    _patch_google(monkeypatch)
+
+    clock = Clock()
+    snd = _mk(store, burst=1, interval=10.0, clock=clock)
+
+    assert run(snd.send(alice, "CHAT", "x"))[0] is True
+    assert run(snd.send(alice, "CHAT", "y"))[0] is False   # alice throttled
+    assert run(snd.send(bob, "CHAT", "z"))[0] is True       # bob unaffected
 
 
 def test_send_propagates_insert_error(monkeypatch, tmp_path):

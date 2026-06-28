@@ -60,7 +60,13 @@ async def lifespan(app: FastAPI):
     data_dir = Path(os.environ.get("CHATCC_DATA_DIR", "data"))
     store = CredentialStore(data_dir / "credentials.json")
     oauth_http = httpx.AsyncClient()
-    sender = Sender(oauth_http, CLIENT_ID, CLIENT_SECRET, store) if (CLIENT_ID and CLIENT_SECRET) else None
+    if CLIENT_ID and CLIENT_SECRET:
+        burst = float(os.environ.get("CHATCC_SEND_BURST", "5"))
+        interval = float(os.environ.get("CHATCC_SEND_INTERVAL", "2"))
+        sender = Sender(oauth_http, CLIENT_ID, CLIENT_SECRET, store,
+                        burst=burst, interval=interval)
+    else:
+        sender = None
     log.info("ChatCC server ready (login/send %s)",
              "enabled" if sender else "disabled — set GOOGLE_CLIENT_ID/SECRET")
     try:

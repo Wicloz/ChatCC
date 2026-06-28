@@ -8,6 +8,19 @@ def run(coro):
     return asyncio.run(coro)
 
 
+class Clock:
+    """Controllable monotonic clock for deterministic rate-limit tests."""
+
+    def __init__(self, start=0.0):
+        self.t = start
+
+    def __call__(self):
+        return self.t
+
+    def advance(self, dt):
+        self.t += dt
+
+
 class FakeResponse:
     """Stand-in for a non-streaming httpx response (.get)."""
 

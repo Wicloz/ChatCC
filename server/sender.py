@@ -7,23 +7,31 @@ to the live chat. The tablet never sees the access or refresh token.
 
 import asyncio
 import logging
+import math
 import time
 
 import oauth
+from ratelimit import RateLimiter
 
 log = logging.getLogger("chatcc.sender")
 
-MAX_LEN = 200  # YouTube live chat messages are capped at 200 chars.
+MAX_LEN = 200          # YouTube live chat messages are capped at 200 chars.
+DEFAULT_BURST = 5      # messages a user may send back-to-back
+DEFAULT_INTERVAL = 2.0  # seconds to regain one send (sustained ~1 per 2s)
 
 
 class Sender:
-    def __init__(self, client, client_id, client_secret, store):
+    def __init__(self, client, client_id, client_secret, store,
+                 burst: float = DEFAULT_BURST, interval: float = DEFAULT_INTERVAL,
+                 clock=time.monotonic):
         self._client = client
         self._cid = client_id
         self._csecret = client_secret
         self._store = store
         self._cache: dict[str, tuple[str, float]] = {}  # auth_token -> (access, expires_at)
         self._lock = asyncio.Lock()
+        # Per-user throttle on outbound Google sends.
+        self._limiter = RateLimiter(burst, 1.0 / interval, clock)
 
     async def send(self, auth_token: str, live_chat_id: str, text: str) -> tuple[bool, str | None]:
         record = self._store.lookup(auth_token)
@@ -35,6 +43,11 @@ class Sender:
             return False, "empty message"
         if len(text) > MAX_LEN:
             text = text[:MAX_LEN]
+
+        # Rate-limit per user before we touch Google, to protect their account.
+        if not self._limiter.allow(auth_token):
+            wait = math.ceil(self._limiter.retry_after(auth_token))
+            return False, f"sending too fast, wait {wait}s"
 
         access = await self._access_token(auth_token, record["refresh_token"])
         if not access:
