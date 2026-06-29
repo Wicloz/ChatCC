@@ -6,6 +6,7 @@ local args = { ... }
 if #args < 1 then
     print("Usage: ytchat <youtube-live-url-or-id>")
     print("       ytchat login")
+    print("       ytchat logout [all]")
     return
 end
 local video = args[1]
@@ -83,6 +84,45 @@ end
 
 if video == "login" then
     runLogin()
+    return
+end
+
+-- Log out: revoke this computer's token, or every device for the account ("all").
+-- The server-side revoke is what matters, so only delete the local token once
+-- the server confirms; on failure keep it so the user can retry.
+local function runLogout(all)
+    if not fs.exists(TOKEN_FILE) then
+        print("Not logged in on this computer.")
+        if all then
+            print("Run 'logout all' from a computer that is still logged in.")
+        end
+        return
+    end
+    local f = fs.open(TOKEN_FILE, "r")
+    local token = f.readAll()
+    f.close()
+
+    local body = textutils.serialiseJSON({ token = token, all = all and true or false })
+    local resp, err = http.post(SERVER .. "/logout", body, { ["Content-Type"] = "application/json" })
+    if not resp then
+        printError("Could not reach server: " .. tostring(err))
+        print("Still logged in. Try again when online.")
+        return
+    end
+    local data = textutils.unserialiseJSON(resp.readAll())
+    resp.close()
+    fs.delete(TOKEN_FILE)
+
+    local n = (data and data.revoked) or 0
+    if all then
+        print("Logged out " .. n .. " device(s) for your account.")
+    else
+        print("Logged out this computer.")
+    end
+end
+
+if video == "logout" then
+    runLogout(args[2] == "all")
     return
 end
 

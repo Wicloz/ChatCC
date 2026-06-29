@@ -51,8 +51,8 @@ async def perform_device_login(ws, client, client_id, client_secret, store) -> N
                     "send permission not granted. Log in again and keep the "
                     "YouTube permission checked."))
                 return
-            account = await oauth.fetch_channel_title(client, data.get("access_token"))
-            token = store.issue(refresh, scope, account)
+            channel_id, account = await oauth.fetch_channel_info(client, data.get("access_token"))
+            token = store.issue(refresh, scope, account, channel_id)
             log.info("login success for account=%s", account)
             await ws.send_text(protocol.login_ok(token, account or ""))
             return

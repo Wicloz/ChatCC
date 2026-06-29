@@ -44,7 +44,8 @@ class CredentialStore:
         except OSError:
             pass  # best-effort on platforms without POSIX perms
 
-    def issue(self, refresh_token: str, scope: str, account: str | None = None) -> str:
+    def issue(self, refresh_token: str, scope: str, account: str | None = None,
+              channel_id: str | None = None) -> str:
         """Store a refresh token and return a fresh bearer auth-token for the tablet."""
         token = secrets.token_urlsafe(32)
         with self._lock:
@@ -52,6 +53,7 @@ class CredentialStore:
                 "refresh_token": refresh_token,
                 "scope": scope,
                 "account": account,
+                "channel_id": channel_id,
                 "created_at": int(time.time()),
             }
             self._save()
@@ -64,11 +66,28 @@ class CredentialStore:
             return self._records.get(_hash(token))
 
     def revoke(self, token: str) -> bool:
+        return self.pop(token) is not None
+
+    def pop(self, token: str) -> dict | None:
+        """Remove and return the record for one auth-token (this device)."""
+        if not token:
+            return None
         with self._lock:
-            if self._records.pop(_hash(token), None) is not None:
+            record = self._records.pop(_hash(token), None)
+            if record is not None:
                 self._save()
-                return True
-        return False
+            return record
+
+    def pop_account(self, channel_id: str) -> list[dict]:
+        """Remove and return every record for a Google account (all its devices)."""
+        if not channel_id:
+            return []
+        with self._lock:
+            hashes = [h for h, r in self._records.items() if r.get("channel_id") == channel_id]
+            removed = [self._records.pop(h) for h in hashes]
+            if removed:
+                self._save()
+            return removed
 
     def __len__(self) -> int:
         return len(self._records)

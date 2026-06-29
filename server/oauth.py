@@ -8,6 +8,7 @@ import httpx
 
 DEVICE_CODE_URL = "https://oauth2.googleapis.com/device/code"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
+REVOKE_URL = "https://oauth2.googleapis.com/revoke"
 CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
 INSERT_MESSAGE_URL = "https://www.googleapis.com/youtube/v3/liveChat/messages"
 
@@ -112,8 +113,12 @@ async def insert_chat_message(client: httpx.AsyncClient, access_token: str,
     return False, reason or f"send failed (HTTP {r.status_code})"
 
 
-async def fetch_channel_title(client: httpx.AsyncClient, access_token: str) -> str | None:
-    """Best-effort: the authenticated account's channel title, for a friendly label."""
+async def fetch_channel_info(client: httpx.AsyncClient, access_token: str) -> tuple[str | None, str | None]:
+    """Best-effort: (channel_id, title) of the authenticated account.
+
+    The channel id is a stable per-account key used to group a user's devices
+    for "log out everywhere"; the title is just a friendly label.
+    """
     try:
         r = await client.get(
             CHANNELS_URL,
@@ -123,7 +128,17 @@ async def fetch_channel_title(client: httpx.AsyncClient, access_token: str) -> s
         if r.status_code == 200:
             items = r.json().get("items", [])
             if items:
-                return items[0].get("snippet", {}).get("title")
+                return items[0].get("id"), items[0].get("snippet", {}).get("title")
     except httpx.HTTPError:
         pass
-    return None
+    return None, None
+
+
+async def revoke_token(client: httpx.AsyncClient, token: str) -> bool:
+    """Best-effort: revoke a refresh/access token at Google (invalidates it
+    everywhere, even if our store is later compromised)."""
+    try:
+        r = await client.post(REVOKE_URL, data={"token": token})
+        return r.status_code == 200
+    except httpx.HTTPError:
+        return False

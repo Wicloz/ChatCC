@@ -36,9 +36,9 @@ def test_login_success_stores_refresh_and_returns_token(monkeypatch, no_sleep, t
         return polls.pop(0)
     monkeypatch.setattr(oauth, "poll_token", poll)
 
-    async def title(*a):
-        return "Alice"
-    monkeypatch.setattr(oauth, "fetch_channel_title", title)
+    async def info(*a):
+        return "CHID", "Alice"
+    monkeypatch.setattr(oauth, "fetch_channel_info", info)
 
     store = CredentialStore(tmp_path / "c.json")
     ws = FakeWS()
@@ -48,7 +48,8 @@ def test_login_success_stores_refresh_and_returns_token(monkeypatch, no_sleep, t
     assert frames[0][0] == "D" and frames[0][1]["code"] == "WXYZ"
     op, payload = frames[-1]
     assert op == "A" and payload["account"] == "Alice"
-    assert store.lookup(payload["token"])["refresh_token"] == "RT"
+    rec = store.lookup(payload["token"])
+    assert rec["refresh_token"] == "RT" and rec["channel_id"] == "CHID"
 
 
 def test_login_slow_down_then_success(monkeypatch, no_sleep, tmp_path):
@@ -60,9 +61,9 @@ def test_login_slow_down_then_success(monkeypatch, no_sleep, tmp_path):
         return polls.pop(0)
     monkeypatch.setattr(oauth, "poll_token", poll)
 
-    async def title(*a):
-        return None
-    monkeypatch.setattr(oauth, "fetch_channel_title", title)
+    async def info(*a):
+        return None, None
+    monkeypatch.setattr(oauth, "fetch_channel_info", info)
 
     store = CredentialStore(tmp_path / "c.json")
     ws = FakeWS()

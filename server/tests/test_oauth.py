@@ -67,13 +67,27 @@ def test_refresh_access_token_error():
         run(oauth.refresh_access_token(http, "cid", "secret", "RT"))
 
 
-def test_fetch_channel_title():
-    http = FakeHTTP([FakeResponse(json_data={"items": [{"snippet": {"title": "My Channel"}}]})])
-    assert run(oauth.fetch_channel_title(http, "AT")) == "My Channel"
+def test_fetch_channel_info():
+    http = FakeHTTP([FakeResponse(json_data={
+        "items": [{"id": "CHID", "snippet": {"title": "My Channel"}}]})])
+    cid, title = run(oauth.fetch_channel_info(http, "AT"))
+    assert cid == "CHID" and title == "My Channel"
     _, url, params, headers = http.calls[0]
     assert headers["Authorization"] == "Bearer AT"
 
 
-def test_fetch_channel_title_handles_empty():
+def test_fetch_channel_info_handles_empty():
     http = FakeHTTP([FakeResponse(json_data={"items": []})])
-    assert run(oauth.fetch_channel_title(http, "AT")) is None
+    assert run(oauth.fetch_channel_info(http, "AT")) == (None, None)
+
+
+def test_revoke_token():
+    http = FakeHTTP([FakeResponse(status_code=200)])
+    assert run(oauth.revoke_token(http, "RT")) is True
+    method, url, data, _ = http.calls[0]
+    assert method == "POST" and url == oauth.REVOKE_URL and data["token"] == "RT"
+
+
+def test_revoke_token_failure():
+    http = FakeHTTP([FakeResponse(status_code=400)])
+    assert run(oauth.revoke_token(http, "RT")) is False

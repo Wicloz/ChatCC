@@ -51,3 +51,29 @@ def test_unique_tokens(tmp_path):
     t2 = store.issue("R2", "s")
     assert t1 != t2
     assert len(store) == 2
+
+
+def test_pop_returns_and_removes(tmp_path):
+    store = CredentialStore(tmp_path / "creds.json")
+    token = store.issue("R", "s", "Alice", "CH1")
+    rec = store.pop(token)
+    assert rec["refresh_token"] == "R" and rec["channel_id"] == "CH1"
+    assert store.lookup(token) is None
+    assert store.pop(token) is None        # idempotent
+
+
+def test_pop_account_removes_all_for_channel(tmp_path):
+    store = CredentialStore(tmp_path / "creds.json")
+    a = store.issue("R1", "s", "Alice", "CH1")
+    b = store.issue("R2", "s", "Alice", "CH1")   # same account, 2 devices
+    c = store.issue("R3", "s", "Bob", "CH2")
+    removed = store.pop_account("CH1")
+    assert {r["refresh_token"] for r in removed} == {"R1", "R2"}
+    assert store.lookup(a) is None and store.lookup(b) is None
+    assert store.lookup(c) is not None           # Bob untouched
+
+
+def test_pop_account_empty_key(tmp_path):
+    store = CredentialStore(tmp_path / "creds.json")
+    assert store.pop_account("") == []
+    assert store.pop_account(None) == []

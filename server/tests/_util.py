@@ -98,9 +98,13 @@ class FakeURL:
 
 
 class FakeRequest:
-    def __init__(self, headers=None, base_url="http://testserver/"):
+    def __init__(self, headers=None, base_url="http://testserver/", json_body=None):
         self.headers = headers or {}
         self.base_url = FakeURL(base_url)
+        self._json = json_body
+
+    async def json(self):
+        return self._json
 
 
 class FakeWS:

@@ -26,6 +26,7 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import PlainTextResponse
 
 import login
+import logout as logout_mod
 import protocol
 import youtube
 from credentials import CredentialStore
@@ -104,6 +105,16 @@ async def install(request: Request):
 @app.get("/client")
 async def client(request: Request):
     return _serve_lua("client.lua", request)
+
+
+@app.post("/logout")
+async def logout_endpoint(request: Request):
+    """Revoke this device's token, or every device for the account (all=true)."""
+    data = await request.json()
+    token = (data or {}).get("token", "")
+    all_devices = bool((data or {}).get("all"))
+    revoked = await logout_mod.logout(oauth_http, store, token, all_devices)
+    return {"ok": True, "revoked": revoked}
 
 
 # -- WebSocket ---------------------------------------------------------------

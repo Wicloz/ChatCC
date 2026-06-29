@@ -1,4 +1,6 @@
 import main
+import oauth
+from credentials import CredentialStore
 from _util import FakeRequest, FakeWS, run
 
 
@@ -72,6 +74,22 @@ def test_post_message_reports_error(monkeypatch):
     ws = FakeWS()
     run(main._post_message(ws, _Src(), "tok", "hi"))
     assert any(f.startswith("S") and "boom" in f for f in ws.sent)
+
+
+def test_logout_endpoint_revokes(monkeypatch, tmp_path):
+    store = CredentialStore(tmp_path / "c.json")
+    token = store.issue("R", "s", "Alice", "CH1")
+    monkeypatch.setattr(main, "store", store, raising=False)
+    monkeypatch.setattr(main, "oauth_http", None, raising=False)
+
+    async def fake_revoke(client, t):
+        return True
+    monkeypatch.setattr(oauth, "revoke_token", fake_revoke)
+
+    req = FakeRequest(json_body={"token": token, "all": False})
+    result = run(main.logout_endpoint(req))
+    assert result == {"ok": True, "revoked": 1}
+    assert store.lookup(token) is None
 
 
 def test_post_message_success_is_silent(monkeypatch):
