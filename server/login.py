@@ -12,6 +12,7 @@ import time
 
 import oauth
 import protocol
+from cctext import to_cc_text
 
 log = logging.getLogger("chatcc.login")
 
@@ -54,7 +55,7 @@ async def perform_device_login(ws, client, client_id, client_secret, store) -> N
             channel_id, account = await oauth.fetch_channel_info(client, data.get("access_token"))
             token = store.issue(refresh, scope, account, channel_id)
             log.info("login success for account=%s", account)
-            await ws.send_text(protocol.login_ok(token, account or ""))
+            await ws.send_text(protocol.login_ok(token, to_cc_text(account or "")))
             return
         if status == oauth.DENIED:
             await ws.send_text(protocol.status("error", "access denied"))

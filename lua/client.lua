@@ -16,6 +16,26 @@ local TOKEN_FILE = ".ytchat-token"
 -- Derive the WebSocket URL from the injected HTTP base (https->wss, http->ws).
 local WS_BASE = SERVER:gsub("^http", "ws")
 
+-- CC terminals have no Unicode support: a Lua string is raw bytes, one byte
+-- is one glyph from a fixed 256-glyph font. textutils.unserialiseJSON always
+-- hands back a valid *UTF-8* string, though (confirmed CC:Tweaked behaviour,
+-- not a bug we can configure away) -- so a character CC could render natively
+-- as a single byte (e.g. é "e") arrives re-expanded into a multi-byte
+-- UTF-8 sequence, which prints as multiple wrong glyphs.
+--
+-- The server already guarantees every character it sends is either plain
+-- ASCII or Latin-1 Supplement (both <= codepoint 255; CC's font matches
+-- ISO-8859-1 in that range) or a bounded '?' run, so every codepoint we see
+-- here is guaranteed <= 255. Collapsing each back to a single byte is always
+-- safe and total -- this undoes exactly the UTF-8 re-expansion above.
+local function toCCText(s)
+    local out = {}
+    for _, cp in utf8.codes(s) do
+        out[#out + 1] = (cp <= 255) and string.char(cp) or "?"
+    end
+    return table.concat(out)
+end
+
 local function urlencode(s)
     return (s:gsub("[^%w%-%._~]", function(c)
         return string.format("%%%02X", string.byte(c))
@@ -61,7 +81,7 @@ local function runLogin()
                 f.close()
                 term.clear()
                 term.setCursorPos(1, 1)
-                local who = (data.account and data.account ~= "") and (" as " .. data.account) or ""
+                local who = (data.account and data.account ~= "") and (" as " .. toCCText(data.account)) or ""
                 print("Logged in" .. who .. ".")
                 print("You can now send messages while watching chat.")
                 pcall(function() ws.close() end)
@@ -285,7 +305,7 @@ local function handleFrame(raw)
     local data = textutils.unserialiseJSON(raw:sub(2))
     if not data then return end
     if op == "M" then
-        addMessage({ author = data.a, text = data.m, role = data.r, mtype = data.t })
+        addMessage({ author = toCCText(data.a), text = toCCText(data.m), role = data.r, mtype = data.t })
         redraw()
     elseif op == "S" then
         local s = data.s

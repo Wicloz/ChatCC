@@ -52,6 +52,26 @@ def test_login_success_stores_refresh_and_returns_token(monkeypatch, no_sleep, t
     assert rec["refresh_token"] == "RT" and rec["channel_id"] == "CHID"
 
 
+def test_login_sanitizes_account_title_for_cc(monkeypatch, no_sleep, tmp_path):
+    _patch_device(monkeypatch)
+
+    async def poll(*a):
+        return (oauth.SUCCESS, {"refresh_token": "RT", "access_token": "AT", "scope": oauth.SCOPE})
+    monkeypatch.setattr(oauth, "poll_token", poll)
+
+    async def info(*a):
+        return "CHID", "Alice \U0001F525 你好世界吗"  # Alice + emoji + 5 CJK chars
+    monkeypatch.setattr(oauth, "fetch_channel_info", info)
+
+    store = CredentialStore(tmp_path / "c.json")
+    ws = FakeWS()
+    run(login.perform_device_login(ws, None, "cid", "sec", store))
+    op, payload = _frames(ws)[-1]
+    assert op == "A" and payload["account"] == "Alice :fire: ???"
+    # The raw title is still kept in the store for our own records/logs.
+    assert store.lookup(payload["token"])["account"].startswith("Alice \U0001F525")
+
+
 def test_login_slow_down_then_success(monkeypatch, no_sleep, tmp_path):
     _patch_device(monkeypatch)
     polls = [(oauth.SLOW_DOWN, {}),

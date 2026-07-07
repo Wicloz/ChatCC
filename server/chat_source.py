@@ -21,6 +21,7 @@ from collections import deque
 import httpx
 
 import protocol
+from cctext import to_cc_text
 
 log = logging.getLogger("chatcc.source")
 
@@ -182,8 +183,10 @@ class ChatSource:
 
         snippet = item.get("snippet", {})
         author_details = item.get("authorDetails", {})
-        author = author_details.get("displayName", "")
-        text = snippet.get("displayMessage") or ""
+        # CC's terminal can't render arbitrary Unicode; convert to its native
+        # 8-bit-safe set (emoji -> :name:, everything else unrenderable -> '?').
+        author = to_cc_text(author_details.get("displayName", ""))
+        text = to_cc_text(snippet.get("displayMessage") or "")
 
         if author_details.get("isChatOwner"):
             role = "owner"

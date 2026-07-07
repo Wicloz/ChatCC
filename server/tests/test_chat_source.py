@@ -36,6 +36,15 @@ def test_role_mapping():
     assert roles == ["owner", "moderator", "member", "verified", "user"]
 
 
+def test_emoji_and_unrenderable_text_sanitized_end_to_end():
+    src = _src()
+    q = src.add_subscriber()
+    src._handle_item(_item("1", "user\U0001F525", "nice \U0001F525 你好世界吗"))
+    msg = _msgs(_drain(q))[0]
+    assert msg["a"] == "user:fire:"
+    assert msg["m"] == "nice :fire: ???"
+
+
 def test_dedup_by_id():
     src = _src()
     q = src.add_subscriber()
