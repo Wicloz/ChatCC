@@ -36,6 +36,30 @@ local function toCCText(s)
     return table.concat(out)
 end
 
+-- CC fires a 'char' event immediately after a 'key' event for any
+-- letter/digit/symbol keypress. Our shortcuts 't' (start composing) and 'q'
+-- (quit/cancel) are both letters, so their paired 'char' event arrives right
+-- behind the 'key' event we already acted on -- and leaks into whatever reads
+-- the next 'char' event: the compose box if we just entered it, or the
+-- shell's prompt if we just exited the program. Swallow that one paired event
+-- so it never reaches either. (Enter/Backspace/arrows have no paired char
+-- event, so this is only needed for letter-key shortcuts.)
+local function swallowPairedChar()
+    local timer = os.startTimer(0)
+    while true do
+        local ev = { os.pullEvent() }
+        if ev[1] == "char" then
+            return
+        elseif ev[1] == "timer" and ev[2] == timer then
+            return
+        else
+            -- Not the event we're waiting for (e.g. an incoming chat message
+            -- landed in this brief window) -- put it back, don't drop it.
+            os.queueEvent(table.unpack(ev))
+        end
+    end
+end
+
 local function urlencode(s)
     return (s:gsub("[^%w%-%._~]", function(c)
         return string.format("%%%02X", string.byte(c))
@@ -95,6 +119,7 @@ local function runLogin()
             printError("Connection closed.")
             return
         elseif name == "key" and ev[2] == keys.q then
+            swallowPairedChar()
             pcall(function() ws.close() end)
             print("Cancelled.")
             return
@@ -373,10 +398,12 @@ local function run()
                             redraw()
                         end
                     elseif k == keys.q then
+                        swallowPairedChar()
                         quit = true; break
                     elseif k == keys.enter or k == keys.t then
                         if authToken then
                             composing = true
+                            if k == keys.t then swallowPairedChar() end
                         else
                             setStatus("not logged in - run: ytchat login")
                         end
